@@ -62,8 +62,8 @@ def mock_ffmpeg_path(mock_ffmpeg: Path) -> Generator[str, None, None]:
 
 
 @pytest.fixture
-def backup_dir(video_dir: Path) -> Generator[Path, None, None]:
-    orig = video_dir / ".originais"
+def originals_dir(video_dir: Path) -> Generator[Path, None, None]:
+    orig = video_dir / "_originals"
     orig.mkdir()
     (orig / "backup1.mp4").write_bytes(b"backup")
     yield orig

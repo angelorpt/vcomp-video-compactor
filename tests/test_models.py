@@ -62,7 +62,7 @@ def test_compression_report_empty():
 
 
 def test_output_mode_values():
-    assert OutputMode.SAME.value == "same"
-    assert OutputMode.BACKUP.value == "backup"
-    assert OutputMode.DELETE.value == "delete"
-    assert OutputMode.SEPARATE.value == "separate"
+    assert OutputMode.KEEP.value == "keep"
+    assert OutputMode.REPLACE.value == "replace"
+    assert OutputMode.CLONE.value == "clone"
+    assert len(OutputMode) == 3

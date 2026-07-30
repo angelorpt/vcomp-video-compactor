@@ -10,10 +10,13 @@ CLI tool to compress videos with ffmpeg + libx265. Python, Typer, Rich.
 
 ```bash
 pip install -e ".[dev]"     # install with test deps (.venv on Ubuntu)
-pytest -v                    # 43 tests (unit + integration with mock ffmpeg)
+pytest -v                    # full suite
+pytest -k <name>             # filter tests
 pytest --cov=vcomp --cov-report=term-missing
 vcomp run <dir>              # compress videos
-vcomp clean [dir]            # remove .originais/ backups
+vcomp clean [dir]            # remove _originals/ backups
+vcomp clean --logs [dir]     # remove vcomp-log.json files
+vcomp rollback [dir]         # restore originals from _originals/
 vcomp install --home         # install to ~/.local/bin/vcomp
 ```
 
@@ -25,12 +28,14 @@ vcomp/
   compressor.py       ProcessPoolExecutor orchestration
   ffmpeg_service.py   ffmpeg command builder + executor
   interfaces.py       Protocol classes (FFmpegExecutor, PathResolver, PrerequisiteChecker)
+  logger.py           CompressionLogger — JSON session logging
   models.py           Data classes (VideoFile, CompressionTask, CompressionResult, CompressionReport)
   path_resolver.py    Shared output path logic
   prerequisite_checker.py  ffmpeg + Python deps verification
   scanner.py          Directory scan
 tests/
-  test_*.py           pytest suite, mock ffmpeg in conftest.py
+  conftest.py         Fixtures: mock_ffmpeg script, sample videos
+  test_*.py           pytest suite (unit + CLI integration via CliRunner)
 ```
 
 ## Package quirk

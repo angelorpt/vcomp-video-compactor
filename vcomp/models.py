@@ -5,10 +5,9 @@ from typing import Optional
 
 
 class OutputMode(str, Enum):
-    SAME = "same"
-    BACKUP = "backup"
-    DELETE = "delete"
-    SEPARATE = "separate"
+    KEEP = "keep"
+    REPLACE = "replace"
+    CLONE = "clone"
 
 
 @dataclass

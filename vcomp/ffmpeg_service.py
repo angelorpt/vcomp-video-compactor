@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -21,6 +22,10 @@ def build_ffmpeg_cmd(task: CompressionTask) -> List[str]:
     ]
 
 
+def _originals_path(task: CompressionTask) -> Path:
+    return task.video.path.parent / "_originals" / task.video.path.name
+
+
 def execute_ffmpeg(task: CompressionTask) -> CompressionResult:
     start = time.time()
     result = CompressionResult(
@@ -29,19 +34,30 @@ def execute_ffmpeg(task: CompressionTask) -> CompressionResult:
         input_size=task.video.size_bytes,
     )
     try:
+        source_path = task.video.path
+
+        if task.mode in (OutputMode.KEEP, OutputMode.REPLACE):
+            backup_dir = task.video.path.parent / "_originals"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            orig = _originals_path(task)
+            shutil.move(str(task.video.path), str(orig))
+            source_path = orig
+
         task.output_path.parent.mkdir(parents=True, exist_ok=True)
         cmd = build_ffmpeg_cmd(task)
+        i = cmd.index("-i")
+        cmd[i + 1] = str(source_path)
+
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=86400)
         result.output_size = task.output_path.stat().st_size
         result.success = True
 
-        if task.mode == OutputMode.BACKUP:
-            backup_dir = task.video.path.parent / ".originais"
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            import shutil
-            shutil.move(str(task.video.path), str(backup_dir / task.video.path.name))
-        elif task.mode == OutputMode.DELETE:
-            task.video.path.unlink()
+        if task.mode == OutputMode.REPLACE:
+            source_path.unlink()
+            try:
+                source_path.parent.rmdir()
+            except OSError:
+                pass
 
     except subprocess.CalledProcessError as e:
         result.error = e.stderr.strip() or f"ffmpeg exited with code {e.returncode}"

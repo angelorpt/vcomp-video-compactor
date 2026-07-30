@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -63,12 +64,64 @@ def _build_summary_table(videos: List[VideoFile], report: CompressionReport) -> 
     return table
 
 
+def _find_originals(directory: Path, recursive: bool) -> List[Path]:
+    result: List[Path] = []
+    if recursive:
+        for root, dirs, _files in os.walk(str(directory)):
+            if "_originals" in dirs:
+                result.append(Path(root) / "_originals")
+    else:
+        candidate = directory / "_originals"
+        if candidate.is_dir():
+            result.append(candidate)
+    return result
+
+
+def _find_logs(directory: Path, recursive: bool) -> List[Path]:
+    result: List[Path] = []
+    for root, _dirs, files in os.walk(str(directory)):
+        for f in files:
+            if f == "vcomp-log.json":
+                result.append(Path(root) / f)
+        if not recursive:
+            break
+    return result
+
+
+def _confirm_action(items: List[Path], item_name: str, dry_run: bool) -> bool:
+    if not items:
+        console.print(f"[yellow]No {item_name} found[/]")
+        return False
+
+    total_size = 0
+    table = Table(title=f"{item_name.title()} Found")
+    table.add_column("Path", style="cyan")
+    table.add_column("Size", style="white")
+    for d in items:
+        dir_size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) if d.is_dir() else 0
+        total_size += dir_size
+        table.add_row(str(d), _format_size(dir_size))
+    table.add_row("[bold]Total[/]", _format_size(total_size))
+    console.print(table)
+
+    if dry_run:
+        console.print("[yellow]Dry run — nothing executed[/]")
+        return False
+
+    label = item_name.rstrip("s")
+    confirm = typer.confirm(f"Delete {len(items)} {label}{'s' if len(items) != 1 else ''} ({_format_size(total_size)})?")
+    if not confirm:
+        console.print("[yellow]Cancelled[/]")
+        return False
+    return True
+
+
 @app.command()
 def run(
     directory: Path = typer.Argument(..., help="Directory containing video files", exists=True, file_okay=False, resolve_path=True),
     recursive: bool = typer.Option(False, "--recursive", "-r", help="Scan subdirectories recursively"),
-    mode: OutputMode = typer.Option(OutputMode.SAME, "--mode", "-m", help="Output mode"),
-    output_dir: Optional[Path] = typer.Option(None, "--output-dir", "-o", help="Output directory (required for 'separate' mode)", exists=False, resolve_path=True),
+    mode: OutputMode = typer.Option(OutputMode.KEEP, "--mode", "-m", help="Output mode: keep (default), replace, clone"),
+    output_dir: Optional[Path] = typer.Option(None, "--output-dir", "-o", help="Output directory (required for 'clone' mode)", exists=False, resolve_path=True),
     crf: int = typer.Option(28, "--crf", help="CRF value for x265 (0-51, lower = better quality)"),
     preset: str = typer.Option("medium", "--preset", help="x265 preset: ultrafast, fast, medium, slow, veryslow"),
     audio_bitrate: str = typer.Option("128k", "--audio-bitrate", help="Audio bitrate (e.g. 96k, 128k, 192k)"),
@@ -106,6 +159,7 @@ def run(
     report = CompressionReport()
     progress = _build_progress()
     task_id = progress.add_task("[cyan]Compressing...", total=len(videos))
+    log_path = directory / "vcomp-log.json"
 
     def on_progress(result: CompressionResult):
         if result.success:
@@ -121,7 +175,7 @@ def run(
 
     try:
         with progress:
-            compress_videos(
+            results = compress_videos(
                 videos=videos,
                 crf=crf,
                 preset=preset,
@@ -132,6 +186,7 @@ def run(
                 jobs=jobs,
                 overwrite=overwrite,
                 progress_callback=on_progress,
+                log_path=log_path,
             )
         console.print(_build_summary_table(videos, report))
 
@@ -141,55 +196,37 @@ def run(
 
 @app.command()
 def clean(
-    directory: Path = typer.Argument(".", help="Directory to clean backups from", exists=True, file_okay=False, resolve_path=True),
-    recursive: bool = typer.Option(False, "--recursive", "-r", help="Find .originais/ recursively"),
+    directory: Path = typer.Argument(".", help="Directory to clean", exists=True, file_okay=False, resolve_path=True),
+    recursive: bool = typer.Option(False, "--recursive", "-r", help="Find _originals/ recursively"),
+    logs: bool = typer.Option(False, "--logs", "-l", help="Remove only vcomp-log.json files"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be deleted without deleting"),
 ):
-    backup_dirs: List[Path] = []
-    if recursive:
-        for root, dirs, _files in os.walk(str(directory)):
-            if ".originais" in dirs:
-                backup_dirs.append(Path(root) / ".originais")
-    else:
-        candidate = directory / ".originais"
-        if candidate.is_dir():
-            backup_dirs.append(candidate)
+    if logs:
+        items = _find_logs(directory, recursive)
+        if not _confirm_action(items, "log files", dry_run):
+            raise typer.Exit()
+        deleted = 0
+        errors = 0
+        for f in items:
+            try:
+                f.unlink()
+                console.print(f"[green]✓[/] Removed {f}")
+                deleted += 1
+            except OSError as e:
+                err_console.print(f"[red]✖[/] Error deleting {f}: {e}")
+                errors += 1
+        console.print(f"[bold]Done:[/] {deleted} log files removed, {errors} errors")
+        return
 
-    if not backup_dirs:
-        console.print("[yellow]No .originais/ directories found[/]")
-        raise typer.Exit()
-
-    total_size = 0
-    table = Table(title="Backup Directories Found")
-    table.add_column("Path", style="cyan")
-    table.add_column("Size", style="white")
-    for d in backup_dirs:
-        dir_size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
-        total_size += dir_size
-        table.add_row(str(d), _format_size(dir_size))
-    table.add_row("[bold]Total[/]", _format_size(total_size))
-    console.print(table)
-
-    if dry_run:
-        console.print("[yellow]Dry run — no files deleted[/]")
-        raise typer.Exit()
-
-    confirm = typer.confirm(f"Delete {len(backup_dirs)} backup director{'y' if len(backup_dirs) == 1 else 'ies'} ({_format_size(total_size)})?")
-    if not confirm:
-        console.print("[yellow]Cancelled[/]")
+    items = _find_originals(directory, recursive)
+    if not _confirm_action(items, "_originals directories", dry_run):
         raise typer.Exit()
 
     deleted = 0
     errors = 0
-    for d in backup_dirs:
+    for d in items:
         try:
-            for f in d.rglob("*"):
-                if f.is_file():
-                    f.unlink()
-            for p in sorted(d.rglob("*"), key=lambda x: len(str(x)), reverse=True):
-                if p.is_dir():
-                    p.rmdir()
-            d.rmdir()
+            shutil.rmtree(d)
             deleted += 1
             console.print(f"[green]✓[/] Removed {d}")
         except OSError as e:
@@ -197,6 +234,67 @@ def clean(
             errors += 1
 
     console.print(f"[bold]Done:[/] {deleted} directories removed, {errors} errors")
+
+
+@app.command()
+def rollback(
+    directory: Path = typer.Argument(".", help="Directory to rollback", exists=True, file_okay=False, resolve_path=True),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be restored without executing"),
+):
+    items = _find_originals(directory, recursive=True)
+    if not items:
+        console.print("[yellow]No _originals/ directories found[/]")
+        raise typer.Exit()
+
+    total_files = 0
+    table = Table(title="Rollback — Files to Restore")
+    table.add_column("Original", style="cyan")
+    table.add_column("Backup", style="white")
+    table.add_column("Size", style="white")
+    for d in items:
+        parent = d.parent
+        for f in d.iterdir():
+            if f.is_file():
+                total_files += 1
+                table.add_row(str(parent / f.name), str(f), _format_size(f.stat().st_size))
+    console.print(table)
+
+    if dry_run:
+        console.print(f"[yellow]Dry run — {total_files} files would be restored, {len(items)} _originals/ removed[/]")
+        raise typer.Exit()
+
+    confirm = typer.confirm(f"Restore {total_files} file(s) and remove {len(items)} _originals/ director{'y' if len(items) == 1 else 'ies'}?")
+    if not confirm:
+        console.print("[yellow]Cancelled[/]")
+        raise typer.Exit()
+
+    restored = 0
+    errors = 0
+    for d in items:
+        parent = d.parent
+        for f in d.iterdir():
+            if f.is_file():
+                try:
+                    shutil.move(str(f), str(parent / f.name))
+                    restored += 1
+                except OSError as e:
+                    err_console.print(f"[red]✖[/] Error restoring {f}: {e}")
+                    errors += 1
+    for d in items:
+        try:
+            shutil.rmtree(d)
+        except OSError as e:
+            err_console.print(f"[red]✖[/] Error removing {d}: {e}")
+            errors += 1
+
+    log_files = _find_logs(directory, recursive=True)
+    for f in log_files:
+        try:
+            f.unlink()
+        except OSError:
+            pass
+
+    console.print(f"[bold]Done:[/] {restored} files restored, {errors} errors")
 
 
 @app.command()
