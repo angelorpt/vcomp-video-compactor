@@ -26,6 +26,16 @@ class VideoFile:
 
 
 @dataclass
+class CompressionTask:
+    video: VideoFile
+    output_path: Path
+    crf: int
+    preset: str
+    audio_bitrate: str
+    mode: OutputMode
+
+
+@dataclass
 class CompressionResult:
     input_path: Path
     output_path: Path

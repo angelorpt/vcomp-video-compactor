@@ -9,46 +9,19 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
 
-from . import VERSION
-from .compressor import check_ffmpeg, compress_videos
+from .compressor import compress_videos
 from .models import CompressionReport, CompressionResult, OutputMode, VideoFile
+from .path_resolver import build_output_path
+from .prerequisite_checker import check_prerequisites
 from .scanner import DEFAULT_EXTENSIONS, scan_directory
 
 app = typer.Typer(
     name="vcomp",
-    help="Video compactor — compress video courses with ffmpeg + libx265",
+    help="Video compactor — compress video with ffmpeg + libx265",
     no_args_is_help=True,
 )
 console = Console()
 err_console = Console(stderr=True)
-
-
-def _check_prerequisites():
-    if not check_ffmpeg():
-        err_console.print("[red]✖ ffmpeg with libx265 support not found[/]")
-        err_console.print("  Install: sudo apt install ffmpeg (Ubuntu/Debian)")
-        err_console.print("  Verify: ffmpeg -version | grep libx265")
-        raise typer.Exit(code=1)
-
-    try:
-        import typer as _  # noqa
-        import rich as _  # noqa
-    except ImportError:
-        err_console.print("[red]✖ Missing Python dependencies[/]")
-        err_console.print("  Install: pip install typer rich")
-        raise typer.Exit(code=1)
-
-
-def _build_output_path(video: VideoFile, input_dir: Path, output_dir: Optional[Path], mode: OutputMode) -> Path:
-    if mode == OutputMode.SEPARATE:
-        assert output_dir is not None, "--output-dir required for separate mode"
-        rel = video.path.relative_to(input_dir.resolve())
-        return (output_dir.resolve() / rel).with_suffix(video.path.suffix)
-
-    parent = video.path.parent
-    stem = video.path.stem
-    ext = video.path.suffix
-    return parent / f"{stem}_compactado{ext}"
 
 
 def _format_size(n_bytes: int) -> str:
@@ -57,6 +30,37 @@ def _format_size(n_bytes: int) -> str:
             return f"{n_bytes:.1f} {unit}"
         n_bytes /= 1024
     return f"{n_bytes:.1f} PB"
+
+
+def _build_progress() -> Progress:
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+        console=console,
+    )
+
+
+def _build_summary_table(videos: List[VideoFile], report: CompressionReport) -> Table:
+    table = Table(title="Compression Summary", show_header=True)
+    table.add_column("Metric", style="bold")
+    table.add_column("Value")
+    table.add_row("Total files", str(len(videos)))
+    table.add_row("Compressed", str(len(report.successful)))
+    table.add_row("Skipped", str(report.total_skipped))
+    table.add_row("Errors", f"[red]{report.total_errors}[/]" if report.total_errors else "0")
+    table.add_row("Input size", _format_size(report.total_input_size))
+    table.add_row("Output size", _format_size(report.total_output_size))
+    if report.total_input_size:
+        pct = (report.total_saved / report.total_input_size * 100)
+        table.add_row("Space saved", f"[green]{_format_size(report.total_saved)}[/] ({pct:.1f}%)")
+    else:
+        table.add_row("Space saved", "0")
+    return table
 
 
 @app.command()
@@ -73,14 +77,11 @@ def run(
     overwrite: bool = typer.Option(False, "--overwrite", help="Re-compress existing files"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without compressing"),
 ):
-    _check_prerequisites()
+    check_prerequisites()
 
     ext_set = {f".{e.strip().lstrip('.')}" for e in extensions.split(",")}
     console.print(f"[bold]Scanning:[/] [cyan]{directory}[/]")
-    if recursive:
-        console.print("  Mode: [cyan]recursive[/]")
-    else:
-        console.print("  Mode: [cyan]non-recursive[/]")
+    console.print(f"  Mode: [cyan]{'recursive' if recursive else 'non-recursive'}[/]")
 
     videos = scan_directory(directory, recursive=recursive, extensions=ext_set)
     if not videos:
@@ -88,7 +89,6 @@ def run(
         raise typer.Exit()
 
     console.print(f"  Found: [bold]{len(videos)}[/] video files ({_format_size(sum(v.size_bytes for v in videos))})")
-
     total_input = sum(v.size_bytes for v in videos)
 
     if dry_run:
@@ -97,25 +97,14 @@ def run(
         table.add_column("Size", style="white")
         table.add_column("Output", style="green")
         for v in videos:
-            out = _build_output_path(v, directory, output_dir, mode)
+            out = build_output_path(v, directory, output_dir, mode)
             table.add_row(str(v.path), _format_size(v.size_bytes), str(out))
         table.add_row("[bold]Total[/]", _format_size(total_input), f"[bold]{len(videos)} files[/]")
         console.print(table)
         raise typer.Exit()
 
     report = CompressionReport()
-
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TimeElapsedColumn(),
-        TextColumn("•"),
-        TimeRemainingColumn(),
-        console=console,
-    )
-
+    progress = _build_progress()
     task_id = progress.add_task("[cyan]Compressing...", total=len(videos))
 
     def on_progress(result: CompressionResult):
@@ -144,18 +133,7 @@ def run(
                 overwrite=overwrite,
                 progress_callback=on_progress,
             )
-
-        table = Table(title="Compression Summary", show_header=True)
-        table.add_column("Metric", style="bold")
-        table.add_column("Value")
-        table.add_row("Total files", str(len(videos)))
-        table.add_row("Compressed", str(len(report.successful)))
-        table.add_row("Skipped", str(report.total_skipped))
-        table.add_row("Errors", f"[red]{report.total_errors}[/]" if report.total_errors else "0")
-        table.add_row("Input size", _format_size(report.total_input_size))
-        table.add_row("Output size", _format_size(report.total_output_size))
-        table.add_row("Space saved", f"[green]{_format_size(report.total_saved)}[/] ({(report.total_saved / report.total_input_size * 100):.1f}%)" if report.total_input_size else "0")
-        console.print(table)
+        console.print(_build_summary_table(videos, report))
 
     except KeyboardInterrupt:
         err_console.print("\n[yellow]Interrupted by user[/]")
@@ -225,7 +203,7 @@ def clean(
 def install(
     home: bool = typer.Option(False, "--home", "-H", help="Install to ~/.local/bin instead of detecting pip"),
 ):
-    _check_prerequisites()
+    check_prerequisites()
 
     if home:
         bin_dir = Path.home() / ".local" / "bin"
