@@ -163,24 +163,48 @@ The default settings (`--crf 28 --preset medium --audio-bitrate 128k`) target a 
 ```
 vcomp run ./videos
   │
-  ├── scanner.py      os.walk / os.scandir → list of VideoFile
-  │
-  ├── compressor.py   ProcessPoolExecutor → ffmpeg subprocess per file
-  │
-  └── cli.py          Typer CLI + Rich Progress / Table
+  ├── scanner.py              os.walk / os.scandir → list of VideoFile
+  ├── path_resolver.py        Shared output path logic (DRY)
+  ├── ffmpeg_service.py       ffmpeg command builder + executor
+  ├── prerequisite_checker.py ffmpeg + Python deps verification
+  ├── compressor.py           ProcessPoolExecutor orchestration
+  ├── interfaces.py           Protocol classes (Dependency Inversion)
+  ├── models.py               Data classes: VideoFile, CompressionTask, etc.
+  └── cli.py                  Typer CLI + Rich Progress / Table
 ```
 
 Built with **Python** using:
 - [**Typer**](https://typer.tiangolo.com/) — CLI argument parsing and subcommands
 - [**Rich**](https://rich.readthedocs.io/) — Terminal UI (progress bars, tables, colors)
 - **ffmpeg** with libx265 (HEVC) — Video encoding
+- **SOLID principles**: single-responsibility modules, protocol-based DI, no code duplication
+
+## Testing
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run all tests
+pytest -v
+
+# With coverage report
+pytest --cov=vcomp --cov-report=term-missing
+
+# Run only unit tests (fast, no CLI subprocess)
+pytest tests/ -k "not integration" -v
+
+# Run only integration tests (requires ffmpeg)
+pytest tests/test_integration.py -v
+```
+
+Tests use a mock ffmpeg script (no real encoding needed). 43 tests covering path logic, scanner, compressor, CLI, models, and end-to-end flows.
 
 ## Project Status
 
-**Version 1.0.0** — Initial release. Core functionality implemented and tested.
+**Version 1.0.0** — Core functionality implemented. SOLID refactored with test suite.
 
 Planned:
-- Test suite
 - Progress ETA per individual file
 - Resume interrupted compressions
 - Config file support
