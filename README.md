@@ -187,4 +187,4 @@ Planned:
 
 ## License
 
-MIT
+[MIT](LICENSE)
