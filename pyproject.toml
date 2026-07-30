@@ -1,0 +1,18 @@
+[project]
+name = "vcomp"
+version = "1.0.0"
+description = "Video compressor using ffmpeg + libx265 — compact video courses with a beautiful CLI"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.0",
+]
+
+[project.scripts]
+vcomp = "vcomp.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["vcomp*"]
+
+[project.urls]
+Source = "https://github.com/anomalyco/video-compactor"
